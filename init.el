@@ -82,6 +82,12 @@
          ("M-s l"   . consult-line)
          ("M-s r"   . consult-ripgrep)))
 
+;; Fuzzy `M-x': `M-x insbuf' finds `insert-buffer'.  `flex' (in-order
+;; subsequence) is tried after prefix matching, so plain prefixes keep
+;; their usual, noise-free candidates.
+(add-to-list 'completion-category-overrides
+             '(command (styles basic flex)))
+
 ;; In-buffer popup for `completion-at-point' (eglot/rust-analyzer, ...).
 (use-package corfu
   :custom
@@ -160,7 +166,12 @@
   :hook (eglot-managed-mode . eglot-inlay-hints-mode)
   :custom
   (eglot-autoshutdown t)               ; kill rust-analyzer with last buffer
-  (eglot-events-buffer-size 0))        ; no *EGLOT events* chatter
+  (eglot-events-buffer-size 0)         ; no *EGLOT events* chatter
+  :config
+  ;; Emacs 31's eglot binds no keys of its own; evil-collection-eglot adds
+  ;; `gd'/`gD'.  `g .' applies the code action(s) at point (rust-analyzer
+  ;; assists such as "Replace qualified path with use").
+  (evil-collection-define-key 'normal 'eglot-mode-map "g." #'eglot-code-actions))
 
 ;;; Version control (Jujutsu) --------------------------------------------
 
