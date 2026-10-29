@@ -43,6 +43,9 @@
 
 ;;; Appearance ----------------------------------------------------------
 
+;; Line numbers in every buffer's gutter, including terminals and the agent.
+(global-display-line-numbers-mode 1)
+
 ;; Default theme. `doom-one' lives in `doom-themes' (MELPA).
 (use-package doom-themes
   :config
@@ -163,15 +166,80 @@
 
 (setq treesit-font-lock-level 4)       ; richest tree-sitter highlighting
 
+;; Format with rustfmt on save.  rustfmt reading stdin assumes the 2015
+;; edition, so pass the edition from the nearest Cargo.toml.
+(defun my/rust-edition ()
+  "Return the Rust edition that applies to the current buffer.
+Walk up to the nearest Cargo.toml with an explicit `edition', which
+covers both a member crate's own edition and `[workspace.package]'
+inherited by `edition.workspace = true'.  Default to 2021."
+  (let ((dir (and buffer-file-name
+                  (file-name-directory (expand-file-name buffer-file-name))))
+        edition)
+    (while (and dir (not edition))
+      (let ((manifest (expand-file-name "Cargo.toml" dir)))
+        (when (file-readable-p manifest)
+          (setq edition
+                (with-temp-buffer
+                  (insert-file-contents manifest)
+                  (goto-char (point-min))
+                  (when (re-search-forward
+                         "^[ \t]*edition[ \t]*=[ \t]*\"\\([0-9]+\\)\"" nil t)
+                    (match-string 1))))))
+      (setq dir (let ((parent (file-name-directory (directory-file-name dir))))
+                  (unless (equal parent dir) parent))))
+    (or edition "2021")))
+
+(defun my/rustfmt-buffer ()
+  "Pipe the buffer through rustfmt, replacing the text on success.
+Runs from `before-save-hook'.  Leaves the buffer untouched when
+rustfmt is missing or rejects the text, as a half-typed edit is a
+syntax error more often than not."
+  (when (and (derived-mode-p 'rust-ts-mode)
+             (not buffer-read-only)
+             (executable-find "rustfmt"))
+    (let ((formatted (generate-new-buffer " *rustfmt*"))
+          (errors (make-temp-file "rustfmt-errors")))
+      (unwind-protect
+          (save-restriction
+            (widen)
+            (if (zerop (call-process-region (point-min) (point-max)
+                                            "rustfmt" nil
+                                            (list formatted errors) nil
+                                            "--emit" "stdout"
+                                            "--edition" (my/rust-edition)))
+                (replace-region-contents (point-min) (point-max) formatted)
+              (message "rustfmt: %s"
+                       (with-temp-buffer
+                         (insert-file-contents errors)
+                         (car (split-string (buffer-string) "\n"))))))
+        (kill-buffer formatted)
+        (delete-file errors)))))
+
+(defun my/rustfmt-on-save ()
+  "Format the current buffer with rustfmt before saving."
+  (add-hook 'before-save-hook #'my/rustfmt-buffer nil t))
+
 (use-package rust-ts-mode
   :ensure nil
-  :hook (rust-ts-mode . eglot-ensure)  ; start rust-analyzer on first .rs file
+  :hook ((rust-ts-mode . eglot-ensure)       ; start rust-analyzer on first .rs file
+         (rust-ts-mode . my/rustfmt-on-save)) ; rustfmt before every save
   :custom
   (rust-ts-mode-indent-offset 4))
 
 (use-package eglot
   :ensure nil
   :hook (eglot-managed-mode . eglot-inlay-hints-mode)
+  :init
+  ;; rust-analyzer annotates every inferred binding and every step of a method
+  ;; chain with its type.  Keep eglot's inlay hints for the useful parts
+  ;; (parameter names, closing-brace labels) but make the server stop sending
+  ;; the type hints, which bury the code.
+  (setq-default eglot-workspace-configuration
+                '(:rust-analyzer
+                  (:inlayHints
+                   (:typeHints (:enable :json-false)
+                    :chainingHints (:enable :json-false)))))
   :custom
   (eglot-autoshutdown t)               ; kill rust-analyzer with last buffer
   (eglot-events-buffer-size 0)         ; no *EGLOT events* chatter
@@ -188,6 +256,27 @@
 ;; compat. `M-x majutsu' opens the log for the repository at `default-directory'.
 (use-package majutsu
   :vc (:url "https://github.com/0WD0/majutsu"))
+
+;; vc-jj is the VC backend for jj, which diff-hl and vc-dir need. GNU ELPA
+;; still ships 0.5, whose `vc-jj--process-lines' signature no longer
+;; matches what diff-hl calls, so pin upstream master. Its autoloads
+;; register `JJ' ahead of `Git', which matters for colocated repos.
+(use-package vc-jj
+  :vc (:url "https://codeberg.org/emacs-jj-vc/vc-jj.el"
+       :rev "17310449644cc527dfa6b8ca5320de4c33d1c7f3"))
+
+;; Gutter marks (added/changed/deleted lines) in the fringe, computed by
+;; the VC backend: for jj that is the working copy (@) against its parent
+;; (@-), so they clear after `jj commit'/`jj new'. Refreshed on save,
+;; revert and VC commands. `C-x v =' jumps to the diff at point, `C-x v n'
+;; reverts a hunk, `C-x v [' / `C-x v ]' move between hunks.
+(use-package diff-hl
+  :demand t                             ; the global mode must run at startup
+  :hook ((vc-dir-mode . turn-on-diff-hl-mode)
+         (dired-mode . diff-hl-dired-mode-unless-remote)
+         (magit-post-refresh . diff-hl-magit-post-refresh))
+  :config
+  (global-diff-hl-mode 1))
 
 ;;; Agent (omp over ACP) -------------------------------------------------
 
@@ -214,15 +303,10 @@
   (agent-shell-confirm-interrupt nil)
   ;; `omp acp' ignores on-disk MCP config (ACP sessions run with MCP
   ;; discovery disabled); the ACP client must declare servers instead.
-  ;; Same socket as the `mcp-server' block further down.
   (agent-shell-mcp-servers
-   '(((name . "emacs")
-      (command . "socat")
-      (args . ("-" (lambda ()
-                     (concat "UNIX-CONNECT:" my/emacs-mcp-socket)))))
-     ;; omp advertises mcpCapabilities.http, so Exa runs over its hosted
-     ;; streamable-HTTP endpoint with no local node/npx process.
-     ((name . "exa")
+   ;; omp advertises mcpCapabilities.http, so Exa runs over its hosted
+   ;; streamable-HTTP endpoint with no local node/npx process.
+   '(((name . "exa")
       (type . "http")
       (url . "https://mcp.exa.ai/mcp")
       ;; Evaluated when a session starts; nil headers mean keyless access.
@@ -301,26 +385,6 @@
               (expand-file-name user-emacs-directory))
         ;; ripgrep + consult are installed, so searches get live filtering.
         agent-recall-search-function 'consult-ripgrep))
-
-;;; Emacs MCP server ----------------------------------------------------
-
-;; Single source of truth for where the server listens; the `agent-shell'
-;; block above passes it to omp over ACP.
-(defconst my/emacs-mcp-socket
-  (expand-file-name ".local/cache/emacs-mcp-server.sock" user-emacs-directory)
-  "Unix socket of the Emacs MCP server.")
-
-;; Lets an MCP client (omp via ~/.omp/agent/mcp.json, Claude, ...) drive
-;; this Emacs instance: read/write buffers, edit files, eval elisp, query
-;; diagnostics. Not on MELPA, so `:vc'. Exposes a Unix socket under the
-;; Emacs cache dir instead of dropping it in ~/.emacs.d's root.
-(use-package mcp-server
-  :vc (:url "https://github.com/rhblind/emacs-mcp-server")
-  :custom
-  (mcp-server-socket-directory (file-name-directory my/emacs-mcp-socket))
-  :config
-  ;; Start after init so a socket failure can't abort startup.
-  (add-hook 'emacs-startup-hook #'mcp-server-start-unix))
 
 ;;; Startup -------------------------------------------------------------
 
