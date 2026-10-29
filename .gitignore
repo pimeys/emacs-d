@@ -1,0 +1,23 @@
+# Package installs (use-package :ensure / package-vc)
+/elpa/
+
+# Byte-compiled / native-compiled output
+/eln-cache/
+*.elc
+
+# Downloaded natives and grammars (auto-installed on first use)
+/ghostel-module/
+/tree-sitter/
+
+# Runtime state written by Emacs
+/custom.el
+/backups/
+/auto-save/
+/auto-save-list/
+/transient/
+/tramp
+/projects.eld
+/.local/
+/.agent-shell/
+/agent/
+/agent-recall/
