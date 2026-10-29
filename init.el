@@ -43,17 +43,21 @@
 
 ;;; Appearance ----------------------------------------------------------
 
+;; Default theme. `doom-one' lives in `doom-themes' (MELPA).
+(use-package doom-themes
+  :config
+  (load-theme 'doom-one t))
+
 ;; Ember (github.com/ember-theme/emacs) is not on MELPA yet, so `:vc'
-;; clones it with package-vc. Built on `doom-themes' (pulled in from
-;; MELPA); ships `ember', `ember-soft' and `ember-light'.
+;; clones it with package-vc. Built on `doom-themes'; ships `ember',
+;; `ember-soft' and `ember-light', all available via `consult-theme'.
 (use-package ember-theme
   :vc (:url "https://github.com/ember-theme/emacs")
   :config
   ;; The package does not add itself to `custom-theme-load-path' (its files
   ;; are written for Doom's loader), so point it at the installed copy.
   (add-to-list 'custom-theme-load-path
-               (file-name-directory (locate-library "ember-theme")))
-  (load-theme 'ember-soft t))
+               (file-name-directory (locate-library "ember-theme"))))
 
 ;;; Mode line -----------------------------------------------------------
 
