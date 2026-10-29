@@ -82,11 +82,15 @@
          ("M-s l"   . consult-line)
          ("M-s r"   . consult-ripgrep)))
 
-;; Fuzzy `M-x': `M-x insbuf' finds `insert-buffer'.  `flex' (in-order
-;; subsequence) is tried after prefix matching, so plain prefixes keep
-;; their usual, noise-free candidates.
-(add-to-list 'completion-category-overrides
-             '(command (styles basic flex)))
+;; Fuzzy matching for every minibuffer prompt (`M-x', buffers, files): input is
+;; split on spaces, the parts match in any order, and `orderless-flex' allows
+;; in-order subsequences — so `M-x insbuf' finds `insert-buffer'.  `basic'
+;; stays as the fallback style.
+(use-package orderless
+  :custom
+  (completion-styles '(orderless basic))
+  (completion-category-overrides '((file (styles basic partial-completion))))
+  (orderless-matching-styles '(orderless-flex orderless-literal orderless-regexp)))
 
 ;; In-buffer popup for `completion-at-point' (eglot/rust-analyzer, ...).
 (use-package corfu
