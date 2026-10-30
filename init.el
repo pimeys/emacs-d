@@ -117,9 +117,11 @@
   :config
   (evil-mode 1)
   ;; Doom-style leader on C-SPC, which no mode-local map claims, unlike SPC
-  ;; (dired's `dired-next-line', help's page scrolling). A real C-SPC press
-  ;; arrives as NUL, i.e. `C-@', so bind that event: (kbd "C-SPC") is the
-  ;; unrelated `C-SPC' modifier event and never matches a real press.
+  ;; (dired's `dired-next-line', help's page scrolling). C-SPC reaches Emacs as
+  ;; two distinct events: `C-SPC' itself (GUI frames, kitty-protocol terminals)
+  ;; and NUL, which Emacs names `C-@' (plain terminals). Bind both, or the
+  ;; leader fires in only one of them; the `C-SPC' binding is what makes the
+  ;; which-key entry read `C-SPC SPC'.
   ;; C-SPC SPC opens `project-find-file'; C-SPC no longer sets the mark in
   ;; normal/visual/motion state, so use `m' to set a marker.
   (defvar my/leader-map (make-sparse-keymap)
@@ -128,6 +130,7 @@
   (dolist (map (list evil-normal-state-map
                      evil-visual-state-map
                      evil-motion-state-map))
+    (keymap-set map "C-SPC" my/leader-map)
     (keymap-set map "C-@" my/leader-map)))
 
 ;; Vim-like keymaps for the rest of Emacs (dired, magit, help, ...).
@@ -240,6 +243,13 @@ syntax error more often than not."
   :custom
   (rust-ts-mode-indent-offset 4))
 
+;; Emacs 31.1 bundles jsonrpc 1.0.29, which sends a request before registering
+;; the continuation for its reply.  A reply read in that window (GC, process
+;; output during the write) is discarded, so a synchronous Eglot request such
+;; as xref references or a code action waits forever.  GNU ELPA's jsonrpc
+;; 1.0.30 registers first and fixes it (bug#82046); it shadows the bundled
+;; copy because `package-initialize' puts `elpa/' ahead on `load-path'.  It is
+;; in `package-selected-packages' so `package-autoremove' keeps it.
 (use-package eglot
   :ensure nil
   :hook (eglot-managed-mode . eglot-inlay-hints-mode)
