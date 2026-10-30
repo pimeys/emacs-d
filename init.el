@@ -338,6 +338,15 @@ syntax error more often than not."
   :bind (("C-c a s" . agent-shell-sidebar-toggle)
          ("C-c a f" . agent-shell-sidebar-toggle-focus)))
 
+;; Landing page for every omp session: triage queue, live sessions and
+;; recently closed ones. Not on MELPA, so `:vc'. The last-reply summarizer
+;; defaults to `claude -p' and falls back to the raw message tail when it is
+;; not on PATH.
+(use-package agent-shell-dashboard
+  :after agent-shell
+  :vc (:url "https://github.com/wandersoncferreira/agent-shell-dashboard")
+  :bind (("C-c a D" . agent-shell-dashboard)))
+
 ;;; Agent notifications --------------------------------------------------
 
 ;; knockknock renders posframe popups. The multi-format icon embedding that
