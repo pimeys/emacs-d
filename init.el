@@ -115,7 +115,20 @@
         evil-want-keybinding nil         ; leave mode keymaps to evil-collection
         evil-undo-system 'undo-redo)     ; built-in undo-redo, no undo-tree
   :config
-  (evil-mode 1))
+  (evil-mode 1)
+  ;; Doom-style leader on C-SPC, which no mode-local map claims, unlike SPC
+  ;; (dired's `dired-next-line', help's page scrolling). A real C-SPC press
+  ;; arrives as NUL, i.e. `C-@', so bind that event: (kbd "C-SPC") is the
+  ;; unrelated `C-SPC' modifier event and never matches a real press.
+  ;; C-SPC SPC opens `project-find-file'; C-SPC no longer sets the mark in
+  ;; normal/visual/motion state, so use `m' to set a marker.
+  (defvar my/leader-map (make-sparse-keymap)
+    "Leader keymap, entered with C-SPC in evil normal/visual/motion state.")
+  (keymap-set my/leader-map "SPC" #'project-find-file)
+  (dolist (map (list evil-normal-state-map
+                     evil-visual-state-map
+                     evil-motion-state-map))
+    (keymap-set map "C-@" my/leader-map)))
 
 ;; Vim-like keymaps for the rest of Emacs (dired, magit, help, ...).
 (use-package evil-collection
