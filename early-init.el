@@ -14,6 +14,13 @@
 (setq package-enable-at-startup nil)   ; init.el calls package-initialize
 (setq inhibit-startup-screen t)
 
+;; Third-party packages (agent-shell, agent-recall, posframe, ...) emit
+;; compile-time warnings on Emacs 31: `when-let' is obsolete, `map-elt' is
+;; used without requiring map.el, and `font-info' exists only in GUI builds.
+;; None of them affects runtime, so keep the *Warnings* buffer out of the
+;; startup path. Set to `silent' instead to log them without displaying.
+(setq native-comp-async-report-warnings-errors nil)
+
 ;; This is the PGTK build, so GTK already picks Wayland. No GDK_BACKEND needed.
 ;; Frame chrome and font must be set here to avoid a resize/repaint on frame 1.
 (push '(menu-bar-lines . 0) default-frame-alist)

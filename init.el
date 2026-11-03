@@ -89,6 +89,12 @@
          ("M-s l"   . consult-line)
          ("M-s r"   . consult-ripgrep)))
 
+;; Filter the current project's file list.  `project-find-file' uses the
+;; project's VC file list, so .gitignore is honored.
+(use-package project
+  :ensure nil
+  :bind (("C-c C-p" . project-find-file)))
+
 ;; Fuzzy matching for every minibuffer prompt (`M-x', buffers, files): input is
 ;; split on spaces, the parts match in any order, and `orderless-flex' allows
 ;; in-order subsequences — so `M-x insbuf' finds `insert-buffer'.  `basic'
@@ -151,6 +157,15 @@
   :config
   (which-key-mode 1))
 
+;;; Terminal input -------------------------------------------------------
+
+;; Translate terminal mouse reports into Emacs mouse events, so clicking a
+;; window selects it, sets point, and activates buttons or links. Zellij
+;; forwards these events when its mouse mode is on (the default); set
+;; `mouse_click_through true' in Zellij's config so the first click on an
+;; unfocused pane reaches Emacs too.
+(xterm-mouse-mode 1)
+
 ;;; Terminal -------------------------------------------------------------
 
 ;; ghostel renders with libghostty-vt (the Ghostty VT engine) through a
@@ -164,7 +179,7 @@
   (ghostel-module-directory
    (expand-file-name "ghostel-module/" user-emacs-directory))
   (ghostel-module-auto-install 'download)
-  :bind (("C-c t" . ghostel)))
+  :bind (("C-c t" . my/view-ghostel)))
 
 (use-package evil-ghostel
   :after (ghostel evil)
@@ -264,6 +279,7 @@ syntax error more often than not."
                    (:typeHints (:enable :json-false)
                     :chainingHints (:enable :json-false)))))
   :custom
+  (eglot-sync-connect nil)             ; never freeze the buffer waiting for rust-analyzer
   (eglot-autoshutdown t)               ; kill rust-analyzer with last buffer
   (eglot-events-buffer-size 0)         ; no *EGLOT events* chatter
   :config
@@ -271,6 +287,38 @@ syntax error more often than not."
   ;; `gd'/`gD'.  `g .' applies the code action(s) at point (rust-analyzer
   ;; assists such as "Replace qualified path with use").
   (evil-collection-define-key 'normal 'eglot-mode-map "g." #'eglot-code-actions))
+
+;;; Languages: Markdown --------------------------------------------------
+
+;; markdown-ts-mode is bundled with Emacs 31; its grammars are not.  They
+;; live in ~/.emacs.d/tree-sitter and the recipes below let
+;; `M-x treesit-install-language-grammar RET markdown RET' (and
+;; `markdown-inline') rebuild them.  The repository's parser split puts
+;; each grammar in its own subdirectory.
+(add-to-list 'treesit-language-source-alist
+             '(markdown "https://github.com/tree-sitter-grammars/tree-sitter-markdown"
+                        nil "tree-sitter-markdown/src"))
+(add-to-list 'treesit-language-source-alist
+             '(markdown-inline "https://github.com/tree-sitter-grammars/tree-sitter-markdown"
+                               nil "tree-sitter-markdown-inline/src"))
+
+(require 'markdown-ts-mode)
+(add-to-list 'auto-mode-alist '("\\.md\\'" . markdown-ts-mode))
+(add-to-list 'auto-mode-alist '("\\.markdown\\'" . markdown-ts-mode))
+
+;;; Directory environments (direnv) --------------------------------------
+
+;; The daemon keeps the environment of the login shell that started it; an
+;; `emacsclient' call forwards only its terminal variables, never its shell's
+;; `process-environment'.  `envrc' runs `direnv export json' for the project
+;; of the buffer being visited and applies the result buffer-locally, so
+;; eglot, rust-analyzer and the formatters started from that buffer see what
+;; a terminal in the project sees.  A server that is already running keeps
+;; its old environment, so reconnect it with `M-x eglot-reconnect' after the
+;; project env changes.  The `.envrc' must be allowed once (`direnv allow',
+;; or `M-x envrc-allow' from a buffer in the project).
+(use-package envrc
+  :hook (after-init . envrc-global-mode))
 
 ;;; Version control (Jujutsu) --------------------------------------------
 
@@ -324,6 +372,19 @@ syntax error more often than not."
   (agent-shell-preferred-agent-config 'omp)
   ;; Approval prompts for tool calls are skipped entirely.
   (agent-shell-confirm-interrupt nil)
+  ;; Show the full stream instead of collapsed summaries: reasoning text and
+  ;; every tool call (command, args, output) are expanded as they arrive.
+  (agent-shell-thought-process-expand-by-default t)
+  (agent-shell-tool-use-expand-by-default t)
+  (agent-shell-activity-group-expand-by-default t)
+  ;; logind authorizes `Inhibit' only for local graphical sessions.  A daemon
+  ;; started by a linger-managed user manager (or an SSH tty session) gets
+  ;; `InteractiveAuthorizationRequired', after which agent-shell warns
+  ;; "Unable to block system sleep" and then treats the failed call as a
+  ;; token, warning "Unknown `system-sleep' sleep token" when the turn ends.
+  ;; Such machines never idle-sleep from a display, so do not ask there.
+  (agent-shell-inhibit-system-sleep
+   (and (member (getenv "XDG_SESSION_TYPE") '("wayland" "x11")) t))
   ;; `omp acp' ignores on-disk MCP config (ACP sessions run with MCP
   ;; discovery disabled); the ACP client must declare servers instead.
   (agent-shell-mcp-servers
@@ -357,7 +418,13 @@ syntax error more often than not."
   :vc (:url "https://github.com/cmacrae/agent-shell-sidebar")
   :custom
   ;; Skip the provider picker, same as the full-buffer `agent-shell'.
-  (agent-shell-sidebar-default-config (agent-shell-omp-make-agent-config))
+  ;; `agent-shell-sidebar--start-session' copies this alist and then calls
+  ;; `map-put!' for :no-focus and :new-session.  An alist cannot grow in
+  ;; place, so with the omp config (which lacks both keys) the toggle dies
+  ;; with `map-not-inplace'.  Seed both keys so the update is in place.
+  (agent-shell-sidebar-default-config
+   (append '((:no-focus . t) (:new-session . t))
+           (agent-shell-omp-make-agent-config)))
   :bind (("C-c a s" . agent-shell-sidebar-toggle)
          ("C-c a f" . agent-shell-sidebar-toggle-focus)))
 
@@ -369,6 +436,307 @@ syntax error more often than not."
   :after agent-shell
   :vc (:url "https://github.com/wandersoncferreira/agent-shell-dashboard")
   :bind (("C-c a D" . agent-shell-dashboard)))
+
+;;; Per-frame views ------------------------------------------------------
+
+;; One `emacsclient' frame per clone (cobb, cobb2, cobb3, cobb4).  Each
+;; frame has one code window and one shared right side window for the
+;; clone's Ghostel terminal, Majutsu log or agent session.  Showing a tool
+;; never covers the code buffer.  State lives in frame parameters, so the
+;; four frames never interfere.
+;;
+;;   C-c w      cycle code -> ghostel -> majutsu -> agent -> code
+;;   C-c 1..4   jump straight to code/ghostel/majutsu/agent
+;;   C-c c/t/j/s  code, Ghostel, Majutsu, agent
+;;   C-c d      hide the tool sidebar
+;;
+;; Ghostel is keyed by project here: the default `ghostel' command uses one
+;; "*ghostel*" buffer for every frame, which would put all four clones in
+;; the same shell.
+
+(defcustom my/sidebar-width 0.45
+  "Fraction of the frame width used by the tool sidebar."
+  :type 'number)
+
+(defvar my/view-order '(code ghostel majutsu agent)
+  "Cycle order for `my/view-cycle'.")
+
+(defun my/view--current ()
+  "Return the view last shown in the selected frame."
+  (or (frame-parameter nil 'my/view-current) 'code))
+
+(defun my/view--root ()
+  "Return the clone root this frame's views belong to."
+  (or (frame-parameter nil 'my/view-root)
+      (ignore-errors (project-root (project-current)))
+      default-directory))
+
+(defun my/view--save-code ()
+  "Record this frame's code window, buffer and root before leaving it."
+  (when (and (eq (my/view--current) 'code)
+             (not (window-parameter (selected-window) 'window-side)))
+    (set-frame-parameter nil 'my/view-code-window (selected-window))
+    (set-frame-parameter nil 'my/view-code-buffer (current-buffer))
+    (set-frame-parameter nil 'my/view-root
+                         (or (ignore-errors (project-root (project-current)))
+                             default-directory))))
+
+(defun my/view--main-window ()
+  "Return the frame's main window, skipping side windows."
+  (let ((saved (frame-parameter nil 'my/view-code-window)))
+    (if (and (window-live-p saved)
+             (not (window-parameter saved 'window-side)))
+        saved
+      (or (seq-find (lambda (window)
+                      (not (window-parameter window 'window-side)))
+                    (window-list (selected-frame) 'nomini))
+          (selected-window)))))
+
+(defun my/view--goto-code ()
+  "Return to this frame's code buffer."
+  (select-window (my/view--main-window))
+  (let ((buffer (frame-parameter nil 'my/view-code-buffer)))
+    (when (buffer-live-p buffer)
+      (switch-to-buffer buffer))))
+
+(defun my/sidebar--width ()
+  "Return the tool sidebar width in columns."
+  (max 40 (floor (* my/sidebar-width (frame-width)))))
+
+(defun my/sidebar--window ()
+  "Return this frame's tool sidebar window, if live."
+  (let ((window (frame-parameter nil 'my/sidebar-window)))
+    (unless (and (window-live-p window)
+                 (window-parameter window 'window-side))
+      (setq window
+            (seq-find (lambda (candidate)
+                        (and (eq (window-parameter candidate 'window-side)
+                                 'right)
+                             (eql (window-parameter candidate 'window-slot) 0)))
+                      (window-list (selected-frame) 'nomini)))
+      (set-frame-parameter nil 'my/sidebar-window window))
+    window))
+
+(defun my/sidebar--resize (window)
+  "Resize WINDOW to `my/sidebar--width'."
+  (unless (one-window-p)
+    (with-selected-window window
+      (let ((window-size-fixed nil)
+            (delta (- (my/sidebar--width) (window-width))))
+        (ignore-errors
+          (cond ((> delta 0) (enlarge-window-horizontally delta))
+                ((< delta 0) (shrink-window-horizontally (- delta)))))))))
+
+(defun my/sidebar--display (buffer)
+  "Display BUFFER in this frame's tool sidebar and return the window."
+  (let ((window (my/sidebar--window)))
+    (unless window
+      (setq window
+            (display-buffer
+             buffer
+             '(display-buffer-in-side-window
+               (side . right)
+               (slot . 0)
+               (window-parameters . ((no-delete-other-windows . t))))))
+      (set-frame-parameter nil 'my/sidebar-window window))
+    (unless (eq (window-buffer window) buffer)
+      (set-window-buffer window buffer))
+    (set-window-parameter window 'window-side 'right)
+    (set-window-parameter window 'window-slot 0)
+    (set-window-parameter window 'no-delete-other-windows t)
+    (set-window-dedicated-p window nil)
+    (my/sidebar--resize window)
+    window))
+
+(defun my/sidebar--showing-mode-p (modes)
+  "Return non-nil when the selected sidebar buffer derives from MODES."
+  (let ((window (my/sidebar--window)))
+    (and window
+         (eq (selected-window) window)
+         (with-current-buffer (window-buffer window)
+           (apply #'derived-mode-p modes)))))
+
+(defun my/sidebar-hide ()
+  "Hide this frame's tool sidebar and return focus to the code window."
+  (interactive)
+  (let ((window (my/sidebar--window)))
+    (when (and window (not (one-window-p)))
+      (when (eq (selected-window) window)
+        (select-window (my/view--main-window)))
+      (delete-window window)))
+  (set-frame-parameter nil 'my/sidebar-window nil)
+  (set-frame-parameter nil 'my/sidebar-view nil)
+  (set-frame-parameter nil 'my/view-current 'code))
+
+(defun my/ghostel-buffer ()
+  "Return this clone's Ghostel buffer, creating the terminal if needed."
+  (let* ((root (my/view--root))
+         (default-directory (file-name-as-directory (expand-file-name root)))
+         (name (format "*ghostel: %s*"
+                       (file-name-nondirectory (directory-file-name root))))
+         (buffer (get-buffer name)))
+    (when (and buffer
+               (not (with-current-buffer buffer
+                      (and (bound-and-true-p ghostel--process)
+                           (process-live-p ghostel--process)))))
+      (kill-buffer buffer)
+      (setq buffer nil))
+    (unless buffer
+      (require 'ghostel)
+      (setq buffer (ghostel-create name)))
+    buffer))
+
+(defun my/view--majutsu-buffer ()
+  "Return this clone's Majutsu log buffer, if one exists."
+  (let ((dir (file-name-as-directory (expand-file-name (my/view--root)))))
+    (seq-find
+     (lambda (buffer)
+       (with-current-buffer buffer
+         (and (derived-mode-p 'majutsu-log-mode)
+              (equal (file-name-as-directory
+                      (expand-file-name
+                       (or (bound-and-true-p majutsu--default-directory)
+                           "")))
+                     dir))))
+     (buffer-list))))
+
+(defun my/majutsu-buffer ()
+  "Return this clone's Majutsu log, creating the log if needed."
+  (or (my/view--majutsu-buffer)
+      (progn
+        (require 'majutsu)
+        (let ((default-directory
+                (file-name-as-directory (expand-file-name (my/view--root)))))
+          (majutsu-log (my/view--root))))
+      (my/view--majutsu-buffer)
+      (user-error "Majutsu did not open a log for %s" (my/view--root))))
+
+(defun my/agent-buffer ()
+  "Return this clone's agent-shell buffer, creating the session if needed."
+  (require 'agent-shell)
+  (require 'agent-shell-sidebar)
+  (require 'agent-shell-omp)
+  (let* ((default-directory
+           (file-name-as-directory (expand-file-name (my/view--root))))
+         (root (agent-shell-sidebar--get-project-root))
+         (buffer (agent-shell-sidebar--get-buffer :project-root root)))
+    (unless buffer
+      (unless agent-shell-sidebar-default-config
+        (setq agent-shell-sidebar-default-config
+              (append '((:no-focus . t) (:new-session . t))
+                      (agent-shell-omp-make-agent-config))))
+      (setq buffer
+            (agent-shell-sidebar--start-session
+             :config agent-shell-sidebar-default-config
+             :project-root root)))
+    buffer))
+
+(defun my/majutsu-display-main (buffer)
+  "Display BUFFER in the main window and select it."
+  (let ((window (display-buffer
+                 buffer
+                 '((display-buffer-reuse-window
+                    display-buffer-use-some-window)
+                   (inhibit-same-window . t)))))
+    (when window
+      (select-window window))
+    window))
+
+(defun my/majutsu-display-buffer (buffer)
+  "Display BUFFER in the sidebar, or in the main window for files."
+  (if (with-current-buffer buffer
+        (derived-mode-p 'majutsu-log-mode 'majutsu-diff-mode 'majutsu-process-mode))
+      (my/sidebar--display buffer)
+    (my/majutsu-display-main buffer)))
+
+(defun my/find-file-in-main-around (orig filename &optional wildcards)
+  "Open files from a Majutsu sidebar buffer in the main window."
+  (if (and (my/sidebar--window)
+           (eq (selected-window) (my/sidebar--window))
+           (derived-mode-p 'majutsu-mode))
+      (let ((buffer (find-file-noselect filename wildcards)))
+        (my/majutsu-display-main buffer)
+        buffer)
+    (funcall orig filename wildcards)))
+
+(unless (advice-member-p #'my/find-file-in-main-around 'find-file)
+  (advice-add 'find-file :around #'my/find-file-in-main-around))
+
+(defun my/majutsu-find-file-around (orig rev file fn)
+  "Display Majutsu files in the main window when the sidebar is selected."
+  (funcall orig rev file
+           (if (and (my/sidebar--window)
+                    (eq (selected-window) (my/sidebar--window)))
+               #'my/majutsu-display-main
+             fn)))
+
+(with-eval-after-load 'majutsu
+  (setq majutsu-display-buffer-function #'my/majutsu-display-buffer))
+
+(with-eval-after-load 'majutsu-file
+  (unless (advice-member-p #'my/majutsu-find-file-around
+                           'majutsu-find-file--internal)
+    (advice-add 'majutsu-find-file--internal :around
+                #'my/majutsu-find-file-around)))
+
+(defun my/view--show-tool (view buffer)
+  "Show BUFFER in the sidebar for VIEW and select it."
+  (let ((main (my/view--main-window)))
+    (when (and (not (eq main (my/sidebar--window)))
+               (eq (window-buffer main) buffer))
+      (my/view--goto-code)))
+  (let ((window (my/sidebar--display buffer)))
+    (set-frame-parameter nil 'my/sidebar-view view)
+    (select-window window)))
+
+(defun my/view-show (view)
+  "Show VIEW for this frame: code, ghostel, majutsu or agent."
+  (unless (eq view 'code)
+    (my/view--save-code))
+  (pcase view
+    ('code (my/view--goto-code))
+    ('ghostel (my/view--show-tool 'ghostel (my/ghostel-buffer)))
+    ('majutsu (my/view--show-tool 'majutsu (my/majutsu-buffer)))
+    ('agent (my/view--show-tool 'agent (my/agent-buffer)))
+    (_ (error "Unknown view: %s" view)))
+  (set-frame-parameter nil 'my/view-current view))
+
+(defun my/view-cycle ()
+  "Cycle this frame through code, Ghostel, Majutsu and agent-shell."
+  (interactive)
+  (my/view-show (or (cadr (memq (my/view--current) my/view-order))
+                    (car my/view-order))))
+
+(defun my/view-code ()
+  "Show this frame's code buffer."
+  (interactive)
+  (my/view-show 'code))
+
+(defun my/view-ghostel ()
+  "Show this clone's Ghostel terminal in the sidebar."
+  (interactive)
+  (if (my/sidebar--showing-mode-p '(ghostel-mode))
+      (my/sidebar-hide)
+    (my/view-show 'ghostel)))
+
+(defun my/view-majutsu ()
+  "Show this clone's Majutsu log in the sidebar."
+  (interactive)
+  (if (my/sidebar--showing-mode-p '(majutsu-log-mode))
+      (my/sidebar-hide)
+    (my/view-show 'majutsu)))
+
+(defun my/view-agent ()
+  "Show this clone's agent-shell session in the sidebar."
+  (interactive)
+  (if (my/sidebar--showing-mode-p '(agent-shell-mode))
+      (my/sidebar-hide)
+    (my/view-show 'agent)))
+
+(global-set-key (kbd "C-c c") #'my/view-code)
+(global-set-key (kbd "C-c j") #'my/view-majutsu)
+(global-set-key (kbd "C-c s") #'my/view-agent)
+(global-set-key (kbd "C-c d") #'my/sidebar-hide)
 
 ;;; Agent notifications --------------------------------------------------
 
